@@ -1,276 +1,171 @@
-/*
- * To change this template, choose Tools | Templates
- * and open the template in the editor.
- */
 package org.neo4j.jsontoneo4j;
-import java.io.File;
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.neo4j.graphdb.Direction;
-import org.neo4j.graphdb.DynamicRelationshipType;
-import org.neo4j.graphdb.GraphDatabaseService;
-import org.neo4j.graphdb.Node;
-import org.neo4j.graphdb.Relationship;
-import org.neo4j.graphdb.RelationshipType;
-import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.index.Index;
-import org.neo4j.graphdb.index.IndexHits;
+import org.neo4j.graphdb.index.UniqueFactory;
 import org.neo4j.kernel.EmbeddedGraphDatabase;
 import org.neo4j.kernel.impl.util.FileUtils;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import java.util.Map.Entry;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import static java.util.Arrays.asList;
+
 
 /**
- *
  * @author rafael
  */
 public class Graph {
-    
-    private String DB_PATH;
-    String greeting;
-    private GraphDatabaseService graphDb;    
-    private String DIR; 
+
+    private static final Logger LOGGER = Logger.getLogger(Graph.class.getName());
+    private GraphDatabaseService graphDb;
     private Index<Node> idIndex;
-    private String ID_KEY;
-    
-    
-    public Graph(String dir, String db_path, boolean newDb, String idKey){
-        DIR = dir;
-        DB_PATH = db_path;
-        if(newDb){
-            clearDb();
+    private String idKey;
+
+
+    public Graph(String dbPath, boolean newDb, String idKey) {
+        if (newDb) {
+           clearDb(dbPath);
         }
-        // START SNIPPET: startDb
-        //graphDb = new GraphDatabaseFactory().newEmbeddedDatabase( DB_PATH );
-        graphDb = new EmbeddedGraphDatabase( DB_PATH );   
-        ID_KEY = idKey;
-        idIndex = graphDb.index().forNodes(ID_KEY);
-        registerShutdownHook( graphDb );
-        // END SNIPPET: startDb      
+        graphDb = new EmbeddedGraphDatabase(dbPath);
+        this.idKey = idKey;
+        idIndex = graphDb.index().forNodes(this.idKey);
     }
-    
-    
-   private enum relationshipTypes implements RelationshipType{
-       relation
-   }
-                        
-   private Node getNodeById (String id){
-        IndexHits<Node> hits = idIndex.get(ID_KEY, id);
-        Node node = hits.getSingle();
-        hits.close();
-        return node;
-   }
-   
-   private void makeRelationship(Node x, Node y, RelationshipType rt){
-       Transaction tx = graphDb.beginTx();
-       try{
-           x.createRelationshipTo(y, rt);
-           tx.success();     
-       } catch (Exception ex){
-           System.out.println(ex.getMessage());
-       } finally {
-           tx.finish();
-       }  
-   }
-      
-    
-   private void clearDb(){
-        try
-        {
-            FileUtils.deleteRecursively( new File( DB_PATH ) );
-        }
-        catch ( IOException e )
-        {
-            throw new RuntimeException( e );
+
+    public Graph(GraphDatabaseService graphDb, String idKey) {
+        this.graphDb = graphDb;
+        this.idKey = idKey;
+    }
+
+    private void clearDb(String dbPath) {
+        try {
+            FileUtils.deleteRecursively(new File(dbPath));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
-    
-    void shutDown(){
-        System.out.println();
-        System.out.println( "Shutting down database ..." );
-        // START SNIPPET: shutdownServer
-        graphDb.shutdown();
-        // END SNIPPET: shutdownServer
+
+    void shutDown() {
+        if (graphDb!=null) graphDb.shutdown();
     }
-    
-     // START SNIPPET: shutdownHook
-    private static void registerShutdownHook( final GraphDatabaseService graphDb ){
-        // Registers a shutdown hook for the Neo4j instance so that it
-        // shuts down nicely when the VM exits (even if you "Ctrl-C" the
-        // running example before it's completed)
-        Runtime.getRuntime().addShutdownHook( new Thread()
-        {
-            @Override
-            public void run()
-            {
-                graphDb.shutdown();
+
+    private Node createUpdateIndexNode(final Object id, final Map<String, Object> properties) {
+        return new UniqueFactory.UniqueNodeFactory(idIndex) {
+            protected void initialize(Node node, Map<String, Object> params) {
+                setProperties(node, properties);
             }
-        } );
+        }.getOrCreate(idKey, id);
     }
-    // END SNIPPET: shutdownHook
-    
-    private Node createUpdateIndexNode(String id, Map<String, Object> properties){       
-        IndexHits<Node> hits = idIndex.get(ID_KEY, id);
-        Node node = hits.getSingle();
-        hits.close();           
+
+    private Node setProperties(Node node, Map<String, Object> properties) {
+        for (Entry<String, Object> entry : properties.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (value instanceof Collection) {
+                node.setProperty(key, ((Collection)value).toArray());
+            } else {
+                node.setProperty(key, value);
+            }
+        }
+        return node;
+    }
+
+    private Node createNotIndexNode(Map<String, Object> properties) {
+        return setProperties(graphDb.createNode(),properties);
+    }
+
+    public void startJSONArray(JSONArray array) {
         Transaction tx = graphDb.beginTx();
         try {
-            if(node==null){
-                node = graphDb.createNode();               
-                node.setProperty(ID_KEY, id);           
-                idIndex.add(node, ID_KEY, id); 
-            }           
-            for(Entry<String, Object> entry: properties.entrySet()){
-                String key = entry.getKey();
-                Object value = entry.getValue();
-                if(value!=JSONObject.NULL && key!=JSONObject.NULL) {
-                    node.setProperty(key, value);
-                }                
-            }
-            tx.success();       
-        } catch (Exception ex){
-            System.out.println("createUpdateIndexNode:" + ex.getMessage());            
-        } finally {
-            tx.finish();
-        }
-        return node;
-    }
-    
-     private Node createNotIndexNode(){                   
-        Node node = null;
-        Transaction tx = graphDb.beginTx();
-        try {            
-            node = graphDb.createNode();                                            
-            tx.success();       
-        } catch (Exception ex){
-            System.out.println("createNotIndexNode:" + ex.getMessage());            
-        } finally {
-            tx.finish();
-        }
-        return node;
-    }
-     
-     private void deleteNode(Node node){
-        Transaction tx = graphDb.beginTx();
-        try {            
-            node.delete();            
-            tx.success();       
-        } catch (Exception ex){
-            System.out.println(ex.getMessage());            
-        } finally {
-            tx.finish();
-        }
-     }
-     
-     private void deleteRelationship(Relationship rel){
-        Transaction tx = graphDb.beginTx();
-        try {            
-            rel.delete();            
-            tx.success();       
-        } catch (Exception ex){
-            System.out.println(ex.getMessage());            
-        } finally {
-            tx.finish();
-        }
-     }
-    
-    public void startJSONArray(JSONArray array){
-        for(int i=0; i<array.length();i++){
-            try {
-                JSONObject object = (JSONObject) array.get(i);
-                analyseJSONObject(object);                
-            } catch (JSONException ex) {
-                Logger.getLogger(Graph.class.getName()).log(Level.SEVERE, null, ex);
-            }            
-        }        
-    }
-    
-    public void analyseJSONArray(JSONArray array, Node parentNode, String key){
-        for(int i=0; i<array.length();i++){
-            try {
-                JSONObject object = (JSONObject) array.get(i);
-                Node n2 = analyseJSONObject(object);
-                if (n2!=null) {
-                    makeRelationship(parentNode, n2, DynamicRelationshipType.withName(key));
-                }
-            } catch (JSONException ex) {
-                Logger.getLogger(Graph.class.getName()).log(Level.SEVERE, null, ex);
-            }            
-        }        
-    }
-    
-    private Node analyseJSONObject(JSONObject object){
-        String id = null;
-        Node node = null;       
-        Map<String,Object> properties = new HashMap<String,Object>();
-        try {
-            id = (String) object.get(ID_KEY);
-            node = createUpdateIndexNode(id, properties);
-           // System.out.println(id);
+            addJSONArray(array);
+            tx.success();
         } catch (JSONException ex) {
-            node = createNotIndexNode();
+            LOGGER.log(Level.SEVERE, null, ex);
+            tx.failure();
+        } finally {
+            tx.finish();
         }
-        
+    }
+
+    private void addJSONArray(JSONArray array) throws JSONException {
+        for (int i = 0; i < array.length(); i++) {
+            addJSONObject((JSONObject) array.get(i));
+        }
+    }
+
+    private Map<String, Object> getProperties(JSONObject object) throws JSONException {
+        Map<String, Object> properties = new HashMap<String, Object>();
         Iterator keys = object.keys();
-        while(keys.hasNext()){
+        while (keys.hasNext()) {
             String key = (String) keys.next();
-            try {
-                JSONObject o2 = (JSONObject) object.get(key);
-                Node n2 = analyseJSONObject(o2);
-                if(node != null && n2!=null){
-                    if(n2.hasProperty(ID_KEY)){
-                        makeRelationship(node, n2, DynamicRelationshipType.withName(key));
-                    } else{                        
-                        for(Relationship rel: n2.getRelationships(Direction.OUTGOING)){
-                            makeRelationship(node, rel.getEndNode(), DynamicRelationshipType.withName(key));
-                            deleteRelationship(rel);
-                        }
-                        deleteNode(n2);
-                    }
-                }
-            } catch (Exception ex) {
-                JSONArray array;
-                try {
-                    array = (JSONArray) object.get(key);
-                    for(int i=0; i<array.length();i++){
-                    try {
-                        JSONObject o2 = (JSONObject) array.get(i);
-                        Node n2 = analyseJSONObject(o2);
-                        if (node != null && n2!=null) {
-                            if(n2.hasProperty(ID_KEY)){
-                                makeRelationship(node, n2, DynamicRelationshipType.withName(key));
-                            } else{                        
-                                for(Relationship rel: n2.getRelationships(Direction.OUTGOING)){
-                                    makeRelationship(node, rel.getEndNode(), DynamicRelationshipType.withName(key));
-                                    deleteRelationship(rel);
-                                }
-                                deleteNode(n2);
-                            }
-                        }
-                        } catch (JSONException ex2) {
-                            Logger.getLogger(Graph.class.getName()).log(Level.SEVERE, null, ex);
-                        }            
-                    }  
-                } catch (Exception ex1) {
-                    try {
-                        properties.put(key, object.get(key));
-                    } catch (JSONException ex2) {
-                        Logger.getLogger(Graph.class.getName()).log(Level.SEVERE, null, ex2);
-                    }
-                }
-            }                        
+            final Object value = object.get(key);
+            if (key == JSONObject.NULL || value == JSONObject.NULL || value instanceof JSONObject) continue;
+            if (value instanceof JSONArray) {
+                final List<Object> list = toList((JSONArray) value);
+                if (list.isEmpty() || list.get(0) instanceof JSONObject) continue;
+                properties.put(key, list);
+            } else {
+                properties.put(key, value);
+            }
         }
-        if(id!=null) {
-            node = createUpdateIndexNode(id, properties);
+        return properties;
+    }
+    private Node addJSONObject(JSONObject object) throws JSONException {
+        Map<String, Object> properties = getProperties(object);
+        Node node = object.has(idKey) ? createUpdateIndexNode(object.get(idKey), properties) : createNotIndexNode(properties);
+
+        for (Entry<String, List<JSONObject>> entry : getRelated(object).entrySet()) {
+            final DynamicRelationshipType type = DynamicRelationshipType.withName(entry.getKey());
+            for (JSONObject jsonObject : entry.getValue()) {
+                final Node n2 = addJSONObject(jsonObject);
+                if (n2.hasProperty(idKey)) {
+                    node.createRelationshipTo(n2, type);
+                } else {
+                    // why?
+                    for (Relationship rel : n2.getRelationships(Direction.OUTGOING)) {
+                        node.createRelationshipTo(rel.getEndNode(), type);
+                        rel.delete();
+                    }
+                    n2.delete();
+                }
+            }
         }
         return node;
     }
-   
+
+    private Map<String, List<JSONObject>> getRelated(JSONObject object) throws JSONException {
+        Map<String, List<JSONObject>> related = new HashMap<String, List<JSONObject>>();
+        Iterator keys = object.keys();
+        while (keys.hasNext()) {
+            String key = (String) keys.next();
+            if (key == JSONObject.NULL) continue;
+            final Object value = object.get(key);
+            if (value == JSONObject.NULL) continue;
+            if (value instanceof JSONObject) related.put(key, asList((JSONObject) value));
+            if (value instanceof JSONArray) {
+                final List list = toList((JSONArray) value);
+                if (list.isEmpty()) continue;
+                if (list.get(0) instanceof JSONObject) {
+                    final List<JSONObject> objectList = (List<JSONObject>) list;
+                    related.put(key, objectList);
+                }
+            }
+        }
+        return related;
+    }
+
+    private List<Object> toList(JSONArray value) throws JSONException {
+        final ArrayList<Object> result = new ArrayList<Object>(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            result.add(value.get(i));
+        }
+        return result;
+    }
 }

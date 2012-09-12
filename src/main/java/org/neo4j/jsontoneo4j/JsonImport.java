@@ -27,15 +27,16 @@ public class JsonImport
         //String dbName = "graph.db";
          
         System.out.println("Starting graph");
-        Graph graph = new Graph(dir, dir+"/"+dbName, true, index);        
-            
+        final Graph graph = new Graph(dir+"/"+dbName, true, index);
+        Runtime.getRuntime().addShutdownHook(new Thread() { public void run() { graph.shutDown(); } });
+
         File folder = new File(dir);
         File[] listOfFiles = folder.listFiles();
-        for(int i=0; i<listOfFiles.length; i++){
-            if(listOfFiles[i].isFile()){
-                String fileName = listOfFiles[i].getPath();
-                if(fileName.endsWith(".js") || fileName.endsWith(".json")){            
-                    System.out.println("Reading "+fileName);    
+        for (File listOfFile : listOfFiles) {
+            if (listOfFile.isFile()) {
+                String fileName = listOfFile.getPath();
+                if (fileName.endsWith(".js") || fileName.endsWith(".json")) {
+                    System.out.println("Reading " + fileName);
                     JSONArray array = Helper.stringToJSONArray(Helper.readFile(fileName));
                     graph.startJSONArray(array);
                 }
